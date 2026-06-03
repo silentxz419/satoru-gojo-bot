@@ -70,8 +70,6 @@ function isSpam(message) {
 // 💬 EVENTO
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
-client.on("messageCreate", async (message) => {
-  if (message.author.bot) return;
 
   // 🚫 bloquear @everyone y @here correctamente
   if (message.mentions.everyone) {
@@ -83,7 +81,7 @@ client.on("messageCreate", async (message) => {
   console.log("Mensaje:", message.content);
 
   // 👇 TU LÓGICA DEL BOT AQUÍ
-});
+
 
   if (config.blockedChannels.includes(message.channel.id)) return;
 
@@ -166,5 +164,9 @@ async function addWarn(message, userId) {
     warns[userId] = 0;
   }
 }
+
+client.once("ready", () => {
+  console.log(`Conectado como ${client.user.tag}`);
+});
 
 client.login(process.env.DISCORD_TOKEN);
