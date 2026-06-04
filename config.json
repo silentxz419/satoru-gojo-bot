@@ -1,0 +1,9 @@
+{
+  "antiSpam": true,
+  "antiToxic": true,
+  "aiEnabled": true,
+  "muteTime": 300000,
+  "muteAfterWarns": 3,
+  "banAfterWarns": 5,
+  "blockedChannels": []
+}

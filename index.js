@@ -15,93 +15,114 @@ const client = new Client({
 });
 
 // 🤖 IA
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY
-});
+const apiKey = process.env.GROQ_API_KEY;
 
 // ⚙️ CONFIG
-let config = {
-  blockedChannels: []
-};
+let config = JSON.parse(fs.readFileSync("./config.json", "utf8"));
+
+setInterval(() => {
+  config = JSON.parse(fs.readFileSync("./config.json", "utf8"));
+}, 3000);
+
+// 🔄 recargar config
+function loadConfig() {
+  config = JSON.parse(fs.readFileSync("./config.json", "utf8"));
+}
 
 // 🚨 DATA
 const warns = {};
 const lastMessages = {};
 
-// 🚫 PALABRAS (base)
-const badWords = [
-  "idiota",
-  "boludo",
-  "imbecil",
-  "estupido",
-  "tonto",
-  "gil",
-  "tarado"
-];
-
-// 🧠 DETECCIÓN MEJORADA
-function isBadMessage(text) {
-  const msg = text.toLowerCase();
-
-  return badWords.some(word =>
-    msg.includes(word)
-  );
-}
-
+// ========================
 // 🚨 ANTI SPAM
+// ========================
 function isSpam(message) {
-  const userId = message.author.id;
+  const id = message.author.id;
   const now = Date.now();
 
-  if (!lastMessages[userId]) {
-    lastMessages[userId] = [];
-  }
+  if (!lastMessages[id]) lastMessages[id] = [];
 
-  lastMessages[userId].push(now);
+  lastMessages[id].push(now);
+  lastMessages[id] = lastMessages[id].slice(-5);
 
-  // solo últimos 5 mensajes
-  lastMessages[userId] = lastMessages[userId].slice(-5);
+  const diff = lastMessages[id][4] - lastMessages[id][0];
 
-  const diff = lastMessages[userId][4] - lastMessages[userId][0];
-
-  return lastMessages[userId].length === 5 && diff < 4000;
+  return lastMessages[id].length === 5 && diff < 4000;
 }
 
-// 💬 EVENTO
+// ========================
+// 🧠 TOXICIDAD
+// ========================
+function isToxic(message) {
+  const text = message.content;
+
+  const caps = text.length > 12 && text === text.toUpperCase();
+  const spamSymbols = /([!?.])\1{3,}/.test(text);
+  const repeated = /(.)\1{4,}/.test(text);
+
+  return caps || spamSymbols || repeated;
+}
+
+// ========================
+// 🚨 WARN SYSTEM
+// ========================
+async function addWarn(message) {
+  const id = message.author.id;
+
+  if (!warns[id]) warns[id] = 0;
+
+  warns[id]++;
+
+  message.channel.send(`⚠️ ${message.author}, advertencia ${warns[id]}/3`);
+
+  const member = message.member;
+  if (!member) return;
+
+  // 🔇 MUTE
+  if (warns[id] >= config.muteAfterWarns) {
+    try {
+      await member.timeout(config.muteTime);
+      message.channel.send(`🔇 ${message.author.tag} fue silenciado.`);
+    } catch (e) {}
+  }
+
+  // 🚫 BAN
+  if (warns[id] >= config.banAfterWarns) {
+    try {
+      await member.ban();
+      message.channel.send(`🚫 ${message.author.tag} fue baneado.`);
+    } catch (e) {}
+
+    warns[id] = 0;
+  }
+}
+
+// ========================
+// 💬 MESSAGE EVENT
+// ========================
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
-  // 🚫 bloquear @everyone y @here correctamente
-  if (message.mentions.everyone) {
-    console.log("Bloqueado @everyone/@here");
-    return;
-  }
-
-  // 🔥 DEBUG (opcional)
-  console.log("Mensaje:", message.content);
-
-  // 👇 TU LÓGICA DEL BOT AQUÍ
-
-
+  // 🚫 CANALES BLOQUEADOS
   if (config.blockedChannels.includes(message.channel.id)) return;
 
-  const userId = message.author.id;
-
-  // 🚫 SPAM
-  if (isSpam(message)) {
+  // 🚫 @everyone
+  if (message.mentions.everyone) {
     await message.delete().catch(() => {});
-
-    message.channel.send(`⚠️ ${message.author}, no hagas spam.`);
-
-    addWarn(message, userId);
     return;
   }
 
-  // 🚫 INSULTOS
-  if (isBadMessage(message.content)) {
+  // 🚫 SPAM
+  if (config.antiSpam && isSpam(message)) {
     await message.delete().catch(() => {});
+    await addWarn(message);
+    return;
+  }
 
-    addWarn(message, userId);
+  // 🚨 TOXICIDAD
+  if (config.antiToxic && isToxic(message)) {
+    await message.delete().catch(() => {});
+    await addWarn(message);
     return;
   }
 
@@ -110,15 +131,41 @@ client.on("messageCreate", async (message) => {
     return message.reply("https://i.imgflip.com/1bij.jpg");
   }
 
+  // 🔒 BLOQUEAR CANAL
+  if (message.content.startsWith("!block")) {
+    const id = message.channel.id;
+
+    if (!config.blockedChannels.includes(id)) {
+      config.blockedChannels.push(id);
+
+      fs.writeFileSync("./config.json", JSON.stringify(config, null, 2));
+
+      return message.reply("🚫 Canal bloqueado para el bot.");
+    }
+  }
+
+  // 🔓 DESBLOQUEAR CANAL
+  if (message.content.startsWith("!unblock")) {
+    const id = message.channel.id;
+
+    config.blockedChannels = config.blockedChannels.filter(c => c !== id);
+
+    fs.writeFileSync("./config.json", JSON.stringify(config, null, 2));
+
+    return message.reply("✅ Canal desbloqueado.");
+  }
+
   // 🤖 IA
+  if (!config.aiEnabled) return;
   if (!message.mentions.has(client.user)) return;
 
   try {
-    const response = await groq.chat.completions.create({
+    const res = await groq.chat.completions.create({
       messages: [
         {
           role: "system",
-          content: "Eres Satoru Gojo. Respondes sobre todo un poco y no hables con mucha confianza"
+          content:
+            "Eres un asistente de Discord. Eres calmado, útil y respetuoso. Respondes corto y claro."
         },
         {
           role: "user",
@@ -128,45 +175,17 @@ client.on("messageCreate", async (message) => {
       model: "llama-3.3-70b-versatile"
     });
 
-    message.reply(response.choices[0].message.content);
+    message.reply(res.choices[0].message.content);
 
   } catch (err) {
     message.reply("❌ Error IA.");
   }
 });
 
-// 🚨 SISTEMA DE WARNS PRO
-async function addWarn(message, userId) {
-  if (!warns[userId]) warns[userId] = 0;
-
-  warns[userId]++;
-
-  message.channel.send(
-    `⚠️ ${message.author}, advertencia ${warns[userId]}/3`
-  );
-
-  const member = message.guild.members.cache.get(userId);
-  if (!member) return;
-
-  // 🔥 3 WARN = MUTE / BAN
-  if (warns[userId] === 3) {
-    try {
-      await member.timeout(60 * 1000 * 10); // 10 min mute
-      message.channel.send(`🔇 ${message.author.tag} muteado por 10 minutos.`);
-    } catch (e) {}
-
-  } else if (warns[userId] >= 5) {
-    try {
-      await member.ban();
-      message.channel.send(`🚫 ${message.author.tag} fue baneado.`);
-    } catch (e) {}
-
-    warns[userId] = 0;
-  }
-}
-
+// 🚀 READY
 client.once("ready", () => {
   console.log(`Conectado como ${client.user.tag}`);
 });
 
-client.login(process.env.DISCORD_TOKEN);
+// 🔑 LOGIN
+const token = process.env.DISCORD_TOKEN;
